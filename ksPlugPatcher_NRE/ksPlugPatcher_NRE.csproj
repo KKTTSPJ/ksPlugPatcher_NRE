@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    ksPlugPatcher_NRE: Koikatsu Sunshine（KKS）用。ksPlug / ksPlugVR と、それに関係するゲーム本体の不具合への回避策を集める。
+    KKS は .NET 4.6 / Unity 2019.4（UnityEngine はモジュールに分かれている）。KK_AlternativeVoice の Release_KKS と同じ参照の組み方。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net46</TargetFramework>
+    <Version>0.6.0</Version>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <EnableDefaultItems>False</EnableDefaultItems>
+    <Configurations>Release_KKS</Configurations>
+    <Configuration Condition="'$(Configuration)' == ''">Release_KKS</Configuration>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release_KKS'">
+    <AssemblyName>ksPlugPatcher_NRE</AssemblyName>
+    <DefineConstants>KKS</DefineConstants>
+    <GameManagedPath>..\..\KoikatsuSunshine_Data\Managed</GameManagedPath>
+    <Optimize>true</Optimize>
+    <DebugType>None</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PatcherPlugin.cs" />
+    <Compile Include="ParentObjectCtrlStaleRefFix.cs" />
+    <Compile Include="KsPlugStaleRefFix.cs" />
+    <Compile Include="CtrlBonesStaleRefFix.cs" />
+    <Compile Include="DynamicBonePerf.cs" />
+    <Compile Include="LazyInviteCardList.cs" />
+    <Compile Include="FaceListReloadOnSwap.cs" />
+    <Compile Include="MaterialNullGuard.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>..\..\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\BepInEx\core\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!--
+      ksPlug.dll / ksPlugVR.dll は意図的に参照しない。
+      ksPlug（通常版）と ksPlugVR は同名クラスを別の名前空間（ksPlug.* / ksPlugVR.*）に持つ別の実装で、
+      通常版のプロセスでも ksPlugVR が読み込まれる（VR の型を解決すると例外になる）。
+      kPlugPatcher_InviteChrID と同じく、ksPlug の型へのアクセスはすべて、動作中のプロセスに合う方のアセンブリからリフレクションで行う。
+    -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameManagedPath)\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(GameManagedPath)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- FaceListCtrl の基底クラス SerializedMonoBehaviour（FaceListReloadOnSwap で FaceListCtrl を扱うために必要） -->
+    <Reference Include="Sirenix.Serialization">
+      <HintPath>$(GameManagedPath)\Sirenix.Serialization.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(GameManagedPath)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="$(GameManagedPath)\UnityEngine.*Module.dll">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
