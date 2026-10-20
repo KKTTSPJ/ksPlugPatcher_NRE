@@ -23,6 +23,9 @@ namespace ksPlugPatcher_NRE
     /// - <see cref="MaterialNullGuard"/>: ksPlug が顔のマテリアルを確かめずに使う問題（表情の頬の色など）。
     /// - <see cref="LazyInviteCardList"/>: ksPlug の招待メニューが全カードを完全に読み込んで保持する問題（メモリ）。
     /// - <see cref="DynamicBonePerf"/>: 多人数の招待で揺れもの（DynamicBone）の負荷が増えて遅くなる問題の計測と回避策（NRE ではないが ksPlug に関係する）。
+    /// - <see cref="HContextResetOnTitle"/>: 設定画面からタイトルに戻ると ksPlug の H の状態が残り、招待キャラが残る・次の H を終えられない問題。
+    /// - <see cref="HStallDiag"/>: H が絶頂の前後で先に進まなくなる問題を調べる診断ログ（回避策ではない）。
+    /// - <see cref="HoushiVoiceWaitFix"/>: ゲーム本体の奉仕で voiceWait が戻らず、H の UI が押せないまま止まる問題。
     ///
     /// 方針（kPlugPatcher_InviteChrID と同じ）:
     /// - 原型の挙動を変えない。破棄済みの要素を飛ばす・探し直す以外は、原型と同じ順序・同じ戻り値にする。
@@ -39,12 +42,13 @@ namespace ksPlugPatcher_NRE
     {
         public const string GUID = "kkttspj.kks.ksplugpatcher.nre";
         public const string PluginName = "ksPlug Patcher NRE";
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.1";
 
         /// <summary>0.5.1 までの GUID。設定ファイル（{GUID}.cfg）の引き継ぎにだけ使う。</summary>
         private const string LegacyGuid = "com.your.kks.ksplugpatcher.nre";
 
         internal static new ManualLogSource Logger;
+        internal static PatcherPlugin Instance;
         internal static bool IsQuitting;
 
         internal static ConfigEntry<bool> EnableParentObjectCtrlStaleRefFix;
@@ -60,12 +64,20 @@ namespace ksPlugPatcher_NRE
         internal static ConfigEntry<bool> LazyInvitePartialLoad;
         internal static ConfigEntry<bool> EnableFaceListReloadOnSwap;
         internal static ConfigEntry<bool> EnableMaterialNullGuard;
+        internal static ConfigEntry<bool> EnableHContextResetOnTitle;
+        internal static ConfigEntry<bool> EnableEndHGuard;
+        internal static ConfigEntry<bool> EnableHStallDiagnostics;
+        internal static ConfigEntry<int> HStallSeconds;
+        internal static ConfigEntry<bool> EnableSpeedUpVoiceWaitFix;
+        internal static ConfigEntry<bool> EnableVoiceWaitWatchdog;
+        internal static ConfigEntry<float> VoiceWaitWatchdogSeconds;
 
         private Harmony _harmony;
 
         private void Awake()
         {
             Logger = base.Logger;
+            Instance = this;
             Logger.LogInfo($"{PluginName} v{Version} を読み込みました。");
             // 0.5.1 までの GUID の設定ファイルを引き継ぐ。どの設定を読むよりも前に行う。
             MigrateLegacyConfigFile();
@@ -126,6 +138,35 @@ namespace ksPlugPatcher_NRE
                 "ksPlug が、顔（と体）のマテリアルが無いキャラ（特定の頭の MOD のカードなど）で、表情の頬の色や汁のマスクを変えようとして NullReferenceException を出す問題の回避策を有効にするかどうか。" +
                 "マテリアルが無いときだけその変更を飛ばし、残りの処理は実行します（招待キャラの表情の反応、アヘ顔、NPC、汁）。変更はゲームの再起動後に反映されます。");
 
+            EnableHContextResetOnTitle = Config.Bind(
+                "HContextReset", "EnableHContextResetOnTitle", true,
+                "ksPlug の H の途中で設定画面の「タイトルへ」を使うと、ksPlug が H の終わりを知らずに H の状態のまま残り、招待キャラがストーリーや次の H に残る問題の回避策を有効にするかどうか。" +
+                "タイトルを読んだときに H の状態が残っていれば、ksPlug 自身の処理で H の外の状態に戻します（招待キャラは ksPlug が H の終わりと同じく片付けます）。通常版の ksPlug のみ（ksPlugVR は自分で戻します）。");
+            EnableEndHGuard = Config.Bind(
+                "HContextReset", "EnableEndHGuard", true,
+                "ksPlug の H の終わりの処理（HManage.EndH）が、前の H の残りのキャラで例外になり、H を終えられなくなる問題の保険を有効にするかどうか。" +
+                "前の H の残り（破棄済み）を一覧から取り除き、それでも例外になったら例外を止めて H を終えられるようにします。");
+            EnableHStallDiagnostics = Config.Bind(
+                "HStallDiag", "EnableHStallDiagnostics", false,
+                "H が絶頂の前後（射精の前のループや声の待ち）で先に進まなくなる問題を調べるため、H の操作（クリック）と、StallSeconds 以上とどまったときの状態（声・シーンの重なり・ボタン・ksPlug の状態・マウスの下の UI）をログに出すかどうか。" +
+                "回避策ではありません。通常版のみ。");
+            HStallSeconds = Config.Bind(
+                "HStallDiag", "StallSeconds", 15,
+                new ConfigDescription("同じ状態にこの秒数とどまったら、状態をログに出します。", new AcceptableValueRange<int>(3, 600)));
+
+            EnableSpeedUpVoiceWaitFix = Config.Bind(
+                "HoushiVoiceWaitFix", "EnableSpeedUpVoiceWaitFix", true,
+                "奉仕で、速さのパッドを押した瞬間と H の処理の切り替わりが重なると、ゲームが「声の終わりを待つ」状態（voiceWait）を立てたまま戻さず、" +
+                "吹き出しのボタン・終了ボタン・体位のメニューが押せなくなる問題の回避策を有効にするかどうか。H が既に Idle から進んでいるときに立った voiceWait を戻します。" +
+                "※ ksPlug ではなくゲーム本体へのパッチです。通常版のみ。");
+            EnableVoiceWaitWatchdog = Config.Bind(
+                "HoushiVoiceWaitFix", "EnableVoiceWaitWatchdog", true,
+                "奉仕のループ中・射精を選ぶ前（WLoop・SLoop・OLoop）に、待つ声もクリックも無いのに voiceWait が WatchdogSeconds 続いたら戻すかどうか（上の回避策で防げない経路の保険）。" +
+                "ゲームはこれらの状態で voiceWait を戻さないため、H の UI が押せないまま止まります。通常版のみ。");
+            VoiceWaitWatchdogSeconds = Config.Bind(
+                "HoushiVoiceWaitFix", "WatchdogSeconds", 3f,
+                new ConfigDescription("EnableVoiceWaitWatchdog で戻すまでの秒数。", new AcceptableValueRange<float>(1f, 60f)));
+
             // 設定の変更をログに出す（F1 の設定画面での切り替えは BepInEx がログに出さないため。計測の前後を区別できるように）
             foreach (ConfigDefinition def in Config.Keys)
                 WatchSetting(Config[def]);
@@ -133,6 +174,8 @@ namespace ksPlugPatcher_NRE
             _harmony = new Harmony(GUID);
             ParentObjectCtrlStaleRefFix.TryApply(_harmony);
             FaceListReloadOnSwap.TryApply(_harmony);
+            HStallDiag.TryApply(_harmony);
+            HoushiVoiceWaitFix.TryApply(_harmony);
         }
 
         /// <summary>

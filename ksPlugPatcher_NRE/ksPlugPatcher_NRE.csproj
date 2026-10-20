@@ -6,7 +6,7 @@
   -->
   <PropertyGroup>
     <TargetFramework>net46</TargetFramework>
-    <Version>0.6.0</Version>
+    <Version>0.7.1</Version>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <EnableDefaultItems>False</EnableDefaultItems>
     <Configurations>Release_KKS</Configurations>
@@ -30,6 +30,9 @@
     <Compile Include="LazyInviteCardList.cs" />
     <Compile Include="FaceListReloadOnSwap.cs" />
     <Compile Include="MaterialNullGuard.cs" />
+    <Compile Include="HContextResetOnTitle.cs" />
+    <Compile Include="HStallDiag.cs" />
+    <Compile Include="HoushiVoiceWaitFix.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,6 +61,11 @@
     <!-- FaceListCtrl の基底クラス SerializedMonoBehaviour（FaceListReloadOnSwap で FaceListCtrl を扱うために必要） -->
     <Reference Include="Sirenix.Serialization">
       <HintPath>$(GameManagedPath)\Sirenix.Serialization.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- HStallDiag: H のボタン（Button）とマウスの下の UI（EventSystem） -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GameManagedPath)\UnityEngine.UI.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine">

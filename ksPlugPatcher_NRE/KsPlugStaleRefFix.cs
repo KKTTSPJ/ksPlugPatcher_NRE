@@ -58,6 +58,8 @@ namespace ksPlugPatcher_NRE
                 CtrlBonesStaleRefFix.TryApply(harmony, asm, root);
                 LazyInviteCardList.TryApply(harmony, asm, root);
                 if (PatcherPlugin.EnableMaterialNullGuard.Value) MaterialNullGuard.TryApply(harmony, asm, root);
+                HContextResetOnTitle.TryApply(harmony, asm, root);
+                HStallDiag.BindKsPlug(asm, root);
             }
             catch (Exception ex)
             {

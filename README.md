@@ -11,7 +11,7 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 - Games: `KoikatsuSunshine` / `KoikatsuSunshine_VR` (not CharaStudio)
 - ksPlug versions: 1.6.7 to 1.7.3 (normal and VR)
 - Tested in game: ksPlug 1.7.0 (normal, with measurements), ksPlug 1.7.3 (normal), ksPlugVR 1.7.3 (patches applied, invite list)
-- Version: 0.6.0
+- Version: 0.7.1
 
 ## What it fixes
 
@@ -23,6 +23,8 @@ The patch and the document are MIT-licensed, so any part of them can be taken in
 | Frame rate drops with many invited girls (DynamicBone) | Stop invited girls' DynamicBones and cap updates to 1 per frame |
 | After a ksPlug swap, faces do not match the lines (face list not reloaded) | Reload the face list together with the voice list |
 | NRE on facial expressions for characters without a face material | Skip only the material call |
+| After "Return to title" from the config screen during H, invited girls stay in the story and the next H, and the next H cannot be ended (ksPlug keeps its H state) | Reset ksPlug's H state when the title is loaded (normal mode) |
+| In service positions, the finish buttons, the end button and the position menu stop responding (game bug: `voiceWait` is left on) | Clear the stale `voiceWait` (game patch, normal mode) |
 
 With ksPlug 1.7.0 (normal mode): no more orgasm loop and 0 ksPlug exceptions (thousands per H before); invite menu Mono +7.6 GB → +77 to 117 MB; 7 girls 137 ms → 25 ms per frame.
 
@@ -33,6 +35,7 @@ With ksPlug 1.7.0 (normal mode): no more orgasm loop and 0 ksPlug exceptions (th
 
 Settings are in `BepInEx\config\kkttspj.kks.ksplugpatcher.nre.cfg` (each workaround can be turned off). See [README_ja.md](README_ja.md) §3 for the full list.
 The settings file of 0.5.x (`com.your.kks.ksplugpatcher.nre.cfg`) is copied to the new name on the first start of 0.6.0.
+The diagnostic log `HStallDiag` (0.7.1) is off by default.
 
 ## Build
 

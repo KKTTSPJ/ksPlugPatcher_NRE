@@ -24,6 +24,8 @@ The goal is to make it easy to fix them in ksPlug itself, so that this patch is 
 | 7 | Many invited characters | Frame rate drops fast (7 girls: 137 ms per frame) | game, made worse by many characters | `DynamicBonePerf.cs` / `DisableGuestDynamicBones`, `LimitDynamicBoneIterations` |
 | 8 | Game `ParentObjectCtrl` | Orgasm repeats while the gauge is empty ("orgasm loop") | game, triggered by body reloads in H | `ParentObjectCtrlStaleRefFix.cs` / `EnableParentObjectCtrlStaleRefFix` |
 | 9 | Smaller NREs seen only a few times (`Binder.StoreUserPref`, `Events.SearchMissingSave`, ksPlugVR `Dealer.Update`, ksPlugVR `GuestAction.QueryInfoFromMain`) | One exception each time | ksPlug, missing null check | not patched |
+| 10 | `Dealer.Ctx` after "Return to title" from the config screen during H (normal mode) | Invited girls stay in the story and in the next H, NRE every frame on the title screen, the next H cannot be ended | ksPlug, behavior | `HContextResetOnTitle.cs` / `EnableHContextResetOnTitle`, `EnableEndHGuard` |
+| 11 | Game `HSprite.OnSpeedUpClick` in service (houshi) positions | All H buttons (finish, end, position menu) stay disabled in the loop / before the finish | game, made more likely by slow frames and long voice lines | `HoushiVoiceWaitFix.cs` / `EnableSpeedUpVoiceWaitFix`, `EnableVoiceWaitWatchdog` |
 
 ## Common cause of #1–#3 (and #8)
 
@@ -249,7 +251,7 @@ The other 22 have `HSceneProc.Update` → `HSonyu.Proc` (or `HSonyu.LoopProc`) �
 (`VisibleObi` / `ProcObi` are new in Koikatsu Sunshine.) After a body reload the items are destroyed.
 In `HSonyu.Proc`, the exception happens in `SetPlay("WS_IN_A")` before `flags.gaugeFemale = 0f`. The gauge stays full and the orgasm repeats.
 
-**Suggestion.** Because the bug is in the game, the fix has to be a Harmony patch. ksPlug triggers the reloads in H (e.g. `ChaCore.SwapCharacter`), so it may be worth shipping the same guard in ksPlug.
+**Suggestion.** This is game code. ksPlugPatcher_NRE already fixes it with a Harmony patch on the game (below), so no change in ksPlug is needed. If you want ksPlug to handle it as well (ksPlug triggers the reloads in H, e.g. `ChaCore.SwapCharacter`), feel free to use the code of the patch (`ParentObjectCtrlStaleRefFix.cs`, MIT).
 We have not checked whether rebuilding `ParentObjectCtrl` after the reload would be a better fix.
 
 **Patch.** Prefixes replace the four methods with the same logic that skips destroyed items and missing keys.
@@ -319,6 +321,69 @@ NullReferenceException
 ksPlug (normal mode) has the same `QueryInfoFromMain`, but it was not seen there.
 
 **Suggested fix.** In `QueryInfoFromMain` (or at the start of the guest actions' `LateUpdate`), return when `lstHeroine[0].chaCtrl == null` or `Ai.Cha == null` (Unity null). Or stop the guest actions before the H scene is unloaded.
+
+## 10. H state is not reset by "Return to title" (normal mode)
+
+Seen in ksPlug 1.7.3 (normal mode): a free H with 11 invited girls, then the config screen's "Return to title" (the game's `Utils.Scene.ReturnTitle`).
+After that, the invited girls were still there in the next story scene (an empty room) and in the next free H. On the title screen and in the story, these ran every frame:
+
+```
+NullReferenceException: Object reference not set to an instance of an object
+  at ksPlug.Character.BellyCtrl.get_IsMain () [0x00045]
+  at ksPlug.Character.BellyCtrl.Update () [0x0003f]
+```
+
+(9,108 times, 11 per frame = one per invited girl), plus `HSession.GroundPlane.LateUpdate` [0x23], `AIMain.MainAiInDecision` [0x4f] ← `HAction.MainActionControl` [0xb3] ← `HCtrl.Update`,
+and in the story `HCtrl.LateUpdate` [0x6b0] (`Core.dealer.StoryHInf` is null). In the next free H, ending the H failed every frame:
+
+```
+NullReferenceException: Object reference not set to an instance of an object
+  at ksPlug.HSession.HManage.EndH () [0x00037]
+  at ksPlug.Core.HSceneProc_EndProc () [0x0001f]
+  at (wrapper dynamic-method) HSceneProc.DMD<HSceneProc::EndProc>(HSceneProc)
+  at (wrapper dynamic-method) HSceneProc.DMD<HSceneProc::Update>(HSceneProc)
+```
+
+(940 times from this prefix and 940 times from `Dealer.Update` [0x56b]). Because the prefix throws, the game's `EndProc` never finishes, so the player cannot leave that H either.
+
+**Cause.**
+- "Return to title" only loads the `Title` scene. It does not go through `HSceneProc.EndProc`, and `HFlag.isHSceneEnd` is not set.
+- ksPlug learns that H ended only from the `HSceneProc.EndProc` prefix (`HManage.EndH` → `Dealer.SetContext(Default)`) and from `HFlag.isHSceneEnd` in `Dealer.Update`.
+  `Core.OnSceneLoad` resets `InStory` on `Title`, but not `Dealer.Ctx`. So `Ctx` stays `H`.
+- `HCtrl` is a component on the `Dealer` object (DontDestroyOnLoad). It is destroyed only when `SetContext` changes away from `H`, and the next `SetContext(H)` adds a second one.
+- Invited girls (`GuestRoot`, made a child of the `Dealer` by `ParentToDealer(..., destroyAfterScene: true)`) are destroyed by `DestroyAfterH` only after `Ctx != H`. So they survive the scene change.
+- `Dealer.ChaCoresInH` is cleared only while `Ctx != H`, so the old entries are still there in the next H. `EndH` then fails at the first `item.Typ` of the loop (IL 0x37).
+
+The VR version is not affected: ksPlugVR sets `Context.Title` when `VRTitle` is loaded (and cleans `HCtrl` / `ChaCoresInH` there).
+
+**Suggested fix.** In `Core.OnSceneLoad`, when `Title` is loaded and `dealer.Ctx` is `H` (or `Esthetic` / `EstResult`), call `dealer.SetContext(Context.Default)` (and destroy any extra `HCtrl` on the dealer).
+`EndH` itself cannot run at that point (the `HFlag` is gone), and the game has already discarded the H result. A null / destroyed check on the `ChaCoresInH` entries in `EndH` would also keep a stale state from blocking the next H.
+
+**Patch.** On `Title` (single mode), if `Ctx` is still `H` / `Esthetic` / `EstResult` and there is no `HSceneProc`, the patch calls ksPlug's own `Dealer.SetContext(Default)` and destroys every `HCtrl` on the dealer.
+The invited girls are then destroyed by ksPlug's `DestroyAfterH` as after a normal H (confirmed: 11 girls, none left 5 seconds later, no ksPlug exceptions afterwards).
+As a safety net, a prefix on `HManage.EndH` removes null / destroyed entries from `ChaCoresInH`, and a finalizer on `Core.HSceneProc_EndProc` stops an exception and sets `Ctx` to `Default`, so the game's `EndProc` can finish.
+
+## 11. Game: H buttons stay disabled in service positions (`voiceWait`)
+
+Not a ksPlug bug, but ksPlug users with many invited girls hit it more often, and it looks like "the orgasm does not continue" (seen in a 3P service position).
+
+**What happens.** In a service position, the finish buttons ("inside" / "outside"), the end button and the position menu stop responding. Clicking them does nothing.
+The game disables all of them while `HFlag.voiceWait` is `true` (`HSprite.Houshi3PProc`: `categoryActionButton.SetEnable(!voiceWait)`, `btnEnd.interactable`).
+Normally `voiceWait` is `true` only while the game waits for a voice line to end, and it is cleared afterwards.
+
+**Cause.** `HSprite.OnSpeedUpClick` (left click on the speed pad) sets `voiceWait = true` in service positions when the girl's animator state is `Idle`, so that the `Idle` step waits for the voices before starting.
+`HActionBase.SetPlay` changes `nowAnimStateName` at once, but the animator still reports `Idle` until its next update. If the pad is clicked in the same frame in which `Idle` switched to `WLoop`,
+`voiceWait` becomes `true` after the `Idle` step has already finished. `WLoop`, `SLoop` and `OLoop` (before the finish is chosen) never clear `voiceWait`, so the buttons stay disabled.
+Our diagnostic log recorded this twice (`WLoop` → `OLoop` with `voiceWait` true, both girls only breathing, buttons disabled, right after a speed-pad click while already in `WLoop`).
+Some ksPlug inputs set `voiceWait = false` (for example a left click on the main girl's body in `HAction.MainActionControl`), so it can recover by chance; when invited girls stand in front of the main girls, those clicks hit the guests instead.
+
+Long voice lines make the player click more while waiting: in 3P the game waits until both girls finish (`IsCheckVoicePlay(0) && IsCheckVoicePlay(1)`), and replacement voice packs can have lines of 10–20 seconds.
+
+**Suggestion.** This is game code. ksPlugPatcher_NRE already fixes it with a Harmony patch on the game (below), so no change in ksPlug is needed. If you want ksPlug to handle it as well, feel free to use the code of the patch (`HoushiVoiceWaitFix.cs`, MIT).
+
+**Patch.**
+- After `HSprite.OnSpeedUpClick`: if it changed `voiceWait` from `false` to `true` while `nowAnimStateName` is no longer `Idle`, set it back to `false` (confirmed in game: it fired twice and the H continued normally).
+- Safety net in `HSceneProc.Update`: in `houshi` / `houshi3P`, in `WLoop` / `SLoop` / `OLoop` before the finish (`rePlay` 0), if `voiceWait` has been `true` for 3 seconds with no pending position change, no click, and no voice to wait for (same rule as `IsCheckVoicePlay`), set it to `false`.
 
 ## License of this document and the patch
 

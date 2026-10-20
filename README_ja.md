@@ -8,7 +8,7 @@ KK の kPlug に対する `kPlugPatcher_InviteChrID` の KKS・ksPlug 版にあ�
 - 対象: `KoikatsuSunshine` / `KoikatsuSunshine_VR`（CharaStudio は対象外）
 - 対応する版: ksPlug・ksPlugVR 1.6.7〜1.7.3
 - 実機で確認した版: ksPlug 1.7.0（通常版、効果の測定）、ksPlug 1.7.3（通常版）、ksPlugVR 1.7.3（パッチの適用と招待の一覧）。
-- 版: 0.6.0
+- 版: 0.7.1
 - ksPlug の作者向けの情報（英語）: [docs/KSPLUG_ISSUES.md](docs/KSPLUG_ISSUES.md)。不具合ごとの例外のスタック・原因・ksPlug の中での直し方の案をまとめています。
 
 ## 1. 解決する問題
@@ -20,6 +20,8 @@ KK の kPlug に対する `kPlugPatcher_InviteChrID` の KKS・ksPlug 版にあ�
 | フリーH などで、H に入るたびにメモリが数GB増える | ksPlug の招待メニューが、全キャラカードを拡張データまで完全に読み込み、H の間ずっと保持する（カード約330枚の環境で Mono +7GB 前後） | 一覧には名前・性格と顔画像だけの軽量版を置き（必要な部分だけを読む部分読み込み）、招待する瞬間にそのカードだけを完全に読み直す |
 | 招待する人数が増えるほど重くなる | ゲーム本体の揺れもの（DynamicBone）の計算が招待キャラの分だけ増え、フレームが遅いと1フレームに最大3回計算するため悪循環になる | 招待キャラの揺れものの計算を止める・1フレームの計算回数を1回に抑える |
 | ksPlug でキャラを交代すると、表情がセリフと合わない | ksPlug の交代は声のリストだけを読み直し、H の表情のリストが H の開始時の性格のまま残る | 声のリストの読み直しが終わったとき、表情のリストも同じ性格で読み直す |
+| H の途中で設定画面の「タイトルへ」を使うと、招待したキャラがストーリーや次の H に残る。タイトルで毎フレーム例外が出て、次の H を終えられなくなる | 設定画面の「タイトルへ」は H の終わりの処理を通らないため、ksPlug が H の状態のまま残り、招待キャラ・H の制御が破棄されない（通常版の ksPlug。ksPlugVR は自分で戻す） | タイトルを読んだときに H の状態が残っていれば、ksPlug 自身の処理で H の外の状態に戻す（招待キャラは ksPlug が H の終わりと同じく片付ける）。前の H の残りで H の終わりの処理が例外になるときの保険も入れる |
+| 奉仕の途中で、「出すよ」などの吹き出しのボタン・終了ボタン・体位のメニューが押せなくなり、先に進めない | ゲーム本体の不具合。速さのパッドを押した瞬間と、H の処理の切り替わり（Idle → ループ）が同じフレームになると、ゲームが「声の終わりを待つ」状態（voiceWait）を立てたまま戻さない。この間、H のボタンはすべて押せない | H が既に進んでいるときに立った voiceWait を戻す。待つ声もクリックも無いのに3秒続いたときも戻す（**ゲーム本体へのパッチ**、通常版のみ） |
 | 一部のキャラで、表情が変わるたびに例外が出る | ksPlug が顔のマテリアルを確かめずに頬の色などを変える。顔のマテリアルが無いキャラ（特定の頭の MOD のカードなど）で例外になり、表情の処理の後半が飛ぶ | マテリアルが無いときだけその変更を飛ばし、残りの処理は実行する |
 
 実機での効果（通常版、ksPlug 1.7.0）:
@@ -63,6 +65,13 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 | DynamicBonePerf | LimitDynamicBoneIterations | true | すべてのキャラの揺れものの1フレームの計算回数を MaxIterationsPerFrame までに抑える。60fps 以上なら見た目は変わりません |
 | DynamicBonePerf | MaxIterationsPerFrame | 1 | 上の上限（1〜2。3以上はゲーム本体と同じ） |
 | DynamicBonePerf | EnablePerfDiagnostics | false | H の間、30秒ごとにフレーム時間・揺れものの数と処理時間などをログに出す（調査用） |
+| HContextReset | EnableHContextResetOnTitle | true | タイトルに戻ったとき、ksPlug の H の状態が残っていれば戻す（通常版の ksPlug のみ） |
+| HContextReset | EnableEndHGuard | true | ksPlug の H の終わりの処理が前の H の残りで例外になるときの保険 |
+| HoushiVoiceWaitFix | EnableSpeedUpVoiceWaitFix | true | 奉仕で、速さのパッドのクリックで立った voiceWait を、H が既に進んでいれば戻す（ゲーム本体へのパッチ、通常版のみ） |
+| HoushiVoiceWaitFix | EnableVoiceWaitWatchdog | true | 奉仕のループ中・射精を選ぶ前に、待つ声もクリックも無いのに voiceWait が WatchdogSeconds 続いたら戻す（保険） |
+| HoushiVoiceWaitFix | WatchdogSeconds | 3 | 上の秒数 |
+| HStallDiag | EnableHStallDiagnostics | false | H の操作（クリック）・voiceWait の変化と、絶頂の前後で StallSeconds 以上とどまったときの状態（声・ボタン・マウスの下の UI など）をログに出す（調査用。ログが多くなります） |
+| HStallDiag | StallSeconds | 15 | 上の秒数 |
 
 設定を変更すると、ログに `[設定] … を 前 → 後 に変更しました` が出ます。
 
@@ -78,6 +87,8 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 [LazyInviteCards] 招待のためカードを読み直しました: 名前 (パス)
 [FaceListReload] 枠0: 表情リストを c21 → c08 に読み直しました（1回目、1457件、544ms）。
 [MaterialNullGuard] FaceExpr.SetExpression: 名前 のマテリアルが無いため SetColor(_overcolor2) を飛ばしました（このキャラ・この所で 1回目）。
+[HContextReset] タイトルに戻ったとき ksPlug の H の状態が H のまま残っていたため、Default に戻しました（ksPlug の H の制御 1個を破棄、招待キャラ 11人は ksPlug が H の終わりと同じく破棄します）。
+[HoushiVoiceWait] 速さのパッドのクリックで voiceWait が立ちましたが、H は既に WLoop に進んでいるため戻しました（…）。
 ```
 
 ## 5. 既知の制約
@@ -87,10 +98,14 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 - 招待キャラの揺れものを止めると、招待キャラの髪・スカートなどは静止します（体の揺れは残ります）。気になる場合は `DisableGuestDynamicBones` を false にしてください（`LimitDynamicBoneIterations` だけでも、7人で 137ms → 42ms 程度に軽くなります）。
 - 遅延読み込みで、一覧のカードは ChaFile の読み込みを通らないため、他のプラグインの読み込みの処理（Sideloader の「見つからない MOD」の警告など）は一覧のカードでは走りません。招待したカードは完全に読み直すので、そのキャラには通常どおり走ります。
 - 顔のマテリアルの回避策は、実機で例外が出ていたことは確認していますが、回避策が実際に飛ばす動作はまだ確認できていません（回避策を入れた後は、まだ該当するキャラを招待していません）。
-- Material Editor のテクスチャが H を出た後も残る問題は、本プラグインではなく、別のプラグイン KKS_METextureLeakFix で回避します。
+- 3P の奉仕では、「出すよ」を押した後、2人の声が終わるまで先に進まず、その間は H のボタンが押せません（ゲーム本体の作り。不具合ではありません）。声を差し替える MOD で声が長いと、その分だけ長く待ちます。
+  なお、KKS の奉仕は、興奮ゲージが 100% になっても「出すよ」を押すまで射精に進みません（これもゲーム本体の作り）。
+- タイトルに戻ったときの回避策は、通常版の ksPlug 1.7.3 で確認しています（招待キャラ 11人は5秒後には残っておらず、片付くまでの数フレームに ksPlug の例外が数件出るだけ）。奉仕の voiceWait の回避策は、パッドのクリックで立った voiceWait を戻す動作を実機で確認しています。保険（WatchdogSeconds）が働いた記録はまだありません。
+- Material Editor のテクスチャが H を出た後も残る問題は、本プラグインではなく、別のプラグイン KKS_METextureLeakFix で回避します（Material Editor 5.0 以降は Material Editor 自身で解決しています）。
 
 ## 6. 更新履歴
 
+- 0.7.1: H の途中で設定画面の「タイトルへ」を使うと、招待キャラが残り、次の H を終えられなくなる問題の回避策を加えました。奉仕で H のボタンが押せなくなるゲーム本体の不具合の回避策を加えました。調査用のログ（`HStallDiag`、既定は無効）を加えました。作者向けの文書に §10・§11 を加えました。
 - 0.6.0: GitHub での公開に合わせて、GUID を `kkttspj.kks.ksplugpatcher.nre` に変えました（設定ファイルは初回の起動で引き継ぎます）。ライセンスを MIT にしました。ksPlug の作者向けの文書 `docs/KSPLUG_ISSUES.md` を加えました。ksPlug・ksPlugVR 1.7.3 での動作を確認しました。
 - 0.5.1: ksPlugVR 1.7.2 で、遅延読み込みのまとめのログ（`[LazyInviteCards] 招待メニューのカード N枚を軽量版にしました …`）が出なかったのを直しました。ksPlugVR 1.7.2 は招待の一覧を H のキャラ選択の時点（`MenuInvite.InitFileList`）で読むため、ログもその時点で出ます。遅延読み込み自体は 0.5.0 でも働いていました。
 - 0.5.0: 最初のリリース（ZIP での仮リリース）。
@@ -103,5 +118,5 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 - 本プラグインは ksPlug とゲーム本体の動作を実行時に書き換えます。**ksPlug やゲームのバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年10月1日 / 最終更新: 2026年10月20日 (v0.6.0)
+作成日時: 2026年10月1日 / 最終更新: 2026年10月20日 (v0.7.1)
 作成者: Claude Opus 5.5
