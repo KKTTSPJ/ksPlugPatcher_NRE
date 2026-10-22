@@ -7,8 +7,8 @@ KK の kPlug に対する `kPlugPatcher_InviteChrID` の KKS・ksPlug 版にあ�
 
 - 対象: `KoikatsuSunshine` / `KoikatsuSunshine_VR`（CharaStudio は対象外）
 - 対応する版: ksPlug・ksPlugVR 1.6.7〜1.7.3
-- 実機で確認した版: ksPlug 1.7.0（通常版、効果の測定）、ksPlug 1.7.3（通常版）、ksPlugVR 1.7.3（パッチの適用と招待の一覧）。
-- 版: 0.7.1
+- 実機で確認した版: ksPlug 1.7.0（通常版、効果の測定）、ksPlug 1.7.3（通常版）、ksPlugVR 1.7.3（H・招待の一覧・タイトルのメニュー・着替え）。0.10.2 で加えた顔画像の縮小と着替えの掃除は、VR でだけ確認しています。
+- 版: 0.10.2
 - ksPlug の作者向けの情報（英語）: [docs/KSPLUG_ISSUES.md](docs/KSPLUG_ISSUES.md)。不具合ごとの例外のスタック・原因・ksPlug の中での直し方の案をまとめています。
 
 ## 1. 解決する問題
@@ -23,11 +23,20 @@ KK の kPlug に対する `kPlugPatcher_InviteChrID` の KKS・ksPlug 版にあ�
 | H の途中で設定画面の「タイトルへ」を使うと、招待したキャラがストーリーや次の H に残る。タイトルで毎フレーム例外が出て、次の H を終えられなくなる | 設定画面の「タイトルへ」は H の終わりの処理を通らないため、ksPlug が H の状態のまま残り、招待キャラ・H の制御が破棄されない（通常版の ksPlug。ksPlugVR は自分で戻す） | タイトルを読んだときに H の状態が残っていれば、ksPlug 自身の処理で H の外の状態に戻す（招待キャラは ksPlug が H の終わりと同じく片付ける）。前の H の残りで H の終わりの処理が例外になるときの保険も入れる |
 | 奉仕の途中で、「出すよ」などの吹き出しのボタン・終了ボタン・体位のメニューが押せなくなり、先に進めない | ゲーム本体の不具合。速さのパッドを押した瞬間と、H の処理の切り替わり（Idle → ループ）が同じフレームになると、ゲームが「声の終わりを待つ」状態（voiceWait）を立てたまま戻さない。この間、H のボタンはすべて押せない | H が既に進んでいるときに立った voiceWait を戻す。待つ声もクリックも無いのに3秒続いたときも戻す（**ゲーム本体へのパッチ**、通常版のみ） |
 | 一部のキャラで、表情が変わるたびに例外が出る | ksPlug が顔のマテリアルを確かめずに頬の色などを変える。顔のマテリアルが無いキャラ（特定の頭の MOD のカードなど）で例外になり、表情の処理の後半が飛ぶ | マテリアルが無いときだけその変更を飛ばし、残りの処理は実行する |
+| 人数が増えると重くなる（揺れものの当たり判定） | ゲーム本体の揺れものは、粒ごとに全部のコライダーの位置と大きさを求め直すため、時間が「粒の数 × コライダーの数」で増える | 揺れもの1つの計算の最初に1回だけ求め、粒ごとにはその値を使う。結果は元と同じ（**ゲーム本体へのパッチ**） |
+| 招待メニューの顔画像が、GPU と CPU の両方に数百MBずつ残る | ksPlug が一覧の顔画像を、カードの画像の大きさのまま・読み書きできる形で作る（471枚で GPU 486MB＋CPU 486MB、タイトルに戻っても残る） | 表示に足りる大きさで作り、CPU 側の写しを捨てる |
+| VR のタイトル画面で、ksPlugVR のメニューがタイトルの UI に重なる所でクリックできない（レイが通り抜ける） | ゲーム本体の VRTK が、先に当たったキャンバスでレイを「当たった点・向き 0」に書き換えるため、後に調べる ksPlugVR のメニューに当たらない | ksPlugVR のメニューを調べるときだけ元のレイに戻す（VR のみ） |
+| H 中に着替えるたびに古い服の画像が残り、H を出るまで解放されない（着替えを続けると VRAM が溢れることがある） | ゲーム本体（KKS）の不具合。H でキャラを読み込むと、着替えの後の掃除（`UnloadUnusedAssets`）を止めたまま戻さない。IllusionFixes も RAM に余裕があれば掃除を飛ばす | 前の着替えから5秒以上たってからの次の着替えと同時に、それまでの分をまとめて1回掃除する（0.6〜0.7秒止まる。**選択制**。無効にすると H を出たときに解放） |
 
 実機での効果（通常版、ksPlug 1.7.0）:
 - 絶頂ループは発生しなくなり、ksPlug 由来の例外は0件になりました（対策前は1回の H で数千件）。
 - フリーH の招待メニューの準備で増える Mono は、+7.6GB から +77〜117MB になりました。準備の時間は約2.4秒です。
 - 1フレームの時間（女性7人）は、回避策なしで 137ms（7fps）、回避策ありで 25ms（40fps）でした。揺れものの処理は人数によらず約2msになります。
+
+0.10.2 で加えた回避策の効果（ksPlug 1.7.3 / ksPlugVR 1.7.3）:
+- 揺れものの当たり判定（通常版、女性6人、招待キャラの揺れものも動かす）: 揺れものの処理 約24 → 約10ms/f、1フレーム 約43 → 約27ms。元の処理との比較 約226万回で、結果の違いは0でした。
+- 招待メニューの顔画像（VR、471枚）: GPU 側 486MB → 212MB、CPU 側の写し 約486MB を解放。見た目の違いはありませんでした。
+- H 中の着替えの掃除（VR）: 着替えを繰り返しても古い服の画像が積み上がらなくなりました。1回の掃除は 0.6〜0.7秒です。
 
 ## 2. 導入方法
 
@@ -58,6 +67,7 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 | KsPlugStaleRefFix | EnableCtrlBonesStaleRefFix | true | ksPlug の CtrlBones・AI.IsCloseFromMBoy の例外の回避策 |
 | LazyInviteCardList | EnableLazyInviteCardList | true | 招待メニューのカードの遅延読み込み。ストーリー中の H（セーブのヒロインの一覧）は対象外 |
 | LazyInviteCardList | PartialLoad | true | 一覧のカードを部分読み込みで作る（無効にすると、1枚ずつ完全に読んでから軽量版にする） |
+| LazyInviteCardList | ShrinkInviteMenuFaces | true | 招待メニューの顔画像を、表示に足りる大きさ（VR は 252x352 まで）の読み書き不可の画像にする（次に一覧を読むときから反映） |
 | FaceListReloadOnSwap | EnableFaceListReloadOnSwap | true | 交代時に表情のリストも読み直す（交代のたびに約0.5秒の読み込みが増えます） |
 | MaterialNullGuard | EnableMaterialNullGuard | true | 顔のマテリアルが無いキャラの例外の回避策（再起動で反映） |
 | DynamicBonePerf | DisableGuestDynamicBones | true | 招待キャラの揺れもの（髪・服・アクセサリ）の計算を止める。止めた揺れものは初期の姿勢で静止します。メインのヒロインと男性は対象外。ゲーム中に切り替えられます |
@@ -65,6 +75,9 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 | DynamicBonePerf | LimitDynamicBoneIterations | true | すべてのキャラの揺れものの1フレームの計算回数を MaxIterationsPerFrame までに抑える。60fps 以上なら見た目は変わりません |
 | DynamicBonePerf | MaxIterationsPerFrame | 1 | 上の上限（1〜2。3以上はゲーム本体と同じ） |
 | DynamicBonePerf | EnablePerfDiagnostics | false | H の間、30秒ごとにフレーム時間・揺れものの数と処理時間などをログに出す（調査用） |
+| DynamicBoneColliderCache | EnableColliderCache | true | 揺れものの当たり判定で、コライダーの位置と大きさを揺れもの1つにつき1回だけ求める（結果は元と同じ）。ゲーム中に切り替えられます |
+| DynamicBoneColliderCache | MergeColliderLoop | true | 粒ごとのコライダーのループを1回の呼び出しにまとめる（EnableColliderCache が有効なとき） |
+| DynamicBoneColliderCache | VerifyColliderCache | false | 元の処理でも計算して結果を比べ、違った回数を60秒ごとのログに出す（確かめる用。有効の間は重くなります） |
 | HContextReset | EnableHContextResetOnTitle | true | タイトルに戻ったとき、ksPlug の H の状態が残っていれば戻す（通常版の ksPlug のみ） |
 | HContextReset | EnableEndHGuard | true | ksPlug の H の終わりの処理が前の H の残りで例外になるときの保険 |
 | HoushiVoiceWaitFix | EnableSpeedUpVoiceWaitFix | true | 奉仕で、速さのパッドのクリックで立った voiceWait を、H が既に進んでいれば戻す（ゲーム本体へのパッチ、通常版のみ） |
@@ -72,6 +85,15 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 | HoushiVoiceWaitFix | WatchdogSeconds | 3 | 上の秒数 |
 | HStallDiag | EnableHStallDiagnostics | false | H の操作（クリック）・voiceWait の変化と、絶頂の前後で StallSeconds 以上とどまったときの状態（声・ボタン・マウスの下の UI など）をログに出す（調査用。ログが多くなります） |
 | HStallDiag | StallSeconds | 15 | 上の秒数 |
+| HOutfitCleanup | EnableHOutfitCleanup | true | H 中の着替えで出た古い服の画像をまとめて掃除する（掃除の間 0.6〜0.7秒止まります。気になる場合は false。H を出れば解放されます） |
+| HOutfitCleanup | Timing | WithNextChange | 掃除する時期。WithNextChange: 前の着替えから DelaySeconds 以上たってからの次の着替えと同時（最後の着替えの分は、次の着替えか H を出るまで残る）。AfterDelay: 最後の着替えから DelaySeconds 後（着替えの後に別に一瞬止まる） |
+| HOutfitCleanup | DelaySeconds | 5 | 上の秒数（1〜60） |
+| HOutfitCleanup | IdleFallbackSeconds | 0 | WithNextChange のとき、着替えが無いままこの秒数たったら残りを掃除する（0 で無効） |
+| HOutfitCleanup | BypassIllusionFixesMemoryCheck | true | IllusionFixes が入っているとき、その「RAM に余裕があれば掃除を飛ばす」判定を通さずに掃除する（IllusionFixes は VRAM を見ないため） |
+| CharaLoadGCClearDiag | EnableCharaLoadGCClearDiagnostics | false | H 中の着替えで掃除が動かない原因を調べるログ（調査用） |
+| VRMenuRaycast | FixRayForKsPlugMenus | true | VR のタイトルなどで、ksPlugVR のメニューがタイトルの UI に重なる所でクリックできない問題の回避策（VR のみ） |
+| VRMenuRaycast | PreferKsPlugMenu | Off | レイが ksPlugVR のメニューに当たっているとき、その要素を先頭に並べ替える（WhenNearer: 手前のときだけ / Always: 常に）。通常は不要です |
+| VRMenuRaycast | LogRaycastHits | false | レイの当たり先の上位4つをログに出す（調査用、VR のみ） |
 
 設定を変更すると、ログに `[設定] … を 前 → 後 に変更しました` が出ます。
 
@@ -89,11 +111,16 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 [MaterialNullGuard] FaceExpr.SetExpression: 名前 のマテリアルが無いため SetColor(_overcolor2) を飛ばしました（このキャラ・この所で 1回目）。
 [HContextReset] タイトルに戻ったとき ksPlug の H の状態が H のまま残っていたため、Default に戻しました（ksPlug の H の制御 1個を破棄、招待キャラ 11人は ksPlug が H の終わりと同じく破棄します）。
 [HoushiVoiceWait] 速さのパッドのクリックで voiceWait が立ちましたが、H は既に WLoop に進んでいるため戻しました（…）。
+[DynamicBoneColliderCache] 直近 60秒: 前計算 137727回・前計算の値で当たり判定 9927349組（165203組/秒）・元の処理で当たり判定 0組・まとめたループ 436033回 / …
+[LazyInviteCards] 招待メニューのカード 471枚を軽量版にしました（…）。… 顔画像: 縮小 67枚・CPU 側の写しだけ捨てた 404枚 / GPU 側の見積 486MB → 212MB、CPU 側の写し 約486MB を解放。
+[HOutfitCleanup] H 中の着替え 1回の分を、次の着替えと同時に（前の着替えから 10秒）、使っていない画像の掃除をIllusionFixes の RAM の判定を通さずに行いました（…、累計 1回）。…
 ```
 
 ## 5. 既知の制約
 
-- VR（ksPlugVR）は、ksPlugVR 1.7.3 でパッチの適用と招待の一覧の遅延読み込みをログで確認しています。VR の H の中で回避策が働いた記録はまだありません。
+- VR（ksPlugVR 1.7.3）では、パッチの適用・招待の一覧の遅延読み込み、H の中の揺れものの当たり判定・着替えの掃除・顔画像の縮小、タイトルのメニューの回避策を確認しています。
+  顔画像の縮小（通常版では ksPlug の表示の大きさに縮めます）と着替えの掃除は、通常版ではまだ確認していません。
+- 着替えの掃除（`HOutfitCleanup`）は、掃除の間 0.6〜0.7秒止まります（読み込まれている物の数で決まり、解放する量にはよりません）。既定の時期では着替えの停止に続けて止まるので目立ちにくくなりますが、最後の着替えの分は次の着替えか H を出るまで残ります。KK のゲームは着替えのたびに同じだけ止まっています。
 - VR の H には `HSceneProc` が無いため、`EnablePerfDiagnostics`（調査用の計測）のログは VR では出ません。回避策は VR でも働きます。
 - 招待キャラの揺れものを止めると、招待キャラの髪・スカートなどは静止します（体の揺れは残ります）。気になる場合は `DisableGuestDynamicBones` を false にしてください（`LimitDynamicBoneIterations` だけでも、7人で 137ms → 42ms 程度に軽くなります）。
 - 遅延読み込みで、一覧のカードは ChaFile の読み込みを通らないため、他のプラグインの読み込みの処理（Sideloader の「見つからない MOD」の警告など）は一覧のカードでは走りません。招待したカードは完全に読み直すので、そのキャラには通常どおり走ります。
@@ -105,6 +132,7 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 
 ## 6. 更新履歴
 
+- 0.10.2: 揺れものの当たり判定を、結果を変えずに軽くしました（`DynamicBoneColliderCache`）。招待メニューの顔画像を表示に足りる大きさにして、CPU 側の写しを捨てるようにしました（`ShrinkInviteMenuFaces`）。VR のタイトルで ksPlugVR のメニューがクリックできない問題の回避策（`VRMenuRaycast`）と、H 中の着替えで古い服の画像が残るゲーム本体の不具合の回避策（`HOutfitCleanup`、選択制）を加えました。作者向けの文書に §6 の追記と §12・§13 を加えました。（0.8.0〜0.10.1 は公開していない開発中の版です。）
 - 0.7.1: H の途中で設定画面の「タイトルへ」を使うと、招待キャラが残り、次の H を終えられなくなる問題の回避策を加えました。奉仕で H のボタンが押せなくなるゲーム本体の不具合の回避策を加えました。調査用のログ（`HStallDiag`、既定は無効）を加えました。作者向けの文書に §10・§11 を加えました。
 - 0.6.0: GitHub での公開に合わせて、GUID を `kkttspj.kks.ksplugpatcher.nre` に変えました（設定ファイルは初回の起動で引き継ぎます）。ライセンスを MIT にしました。ksPlug の作者向けの文書 `docs/KSPLUG_ISSUES.md` を加えました。ksPlug・ksPlugVR 1.7.3 での動作を確認しました。
 - 0.5.1: ksPlugVR 1.7.2 で、遅延読み込みのまとめのログ（`[LazyInviteCards] 招待メニューのカード N枚を軽量版にしました …`）が出なかったのを直しました。ksPlugVR 1.7.2 は招待の一覧を H のキャラ選択の時点（`MenuInvite.InitFileList`）で読むため、ログもその時点で出ます。遅延読み込み自体は 0.5.0 でも働いていました。
@@ -118,5 +146,5 @@ ksPlug.dll は参照しません（ksPlug と ksPlugVR の型は、動作中の�
 - 本プラグインは ksPlug とゲーム本体の動作を実行時に書き換えます。**ksPlug やゲームのバージョンが変わると対象のメソッドが見つからず、機能の一部または全部が無効になることがあります**（その場合はログに理由が出ます）。
 
 ---
-作成日時: 2026年10月1日 / 最終更新: 2026年10月20日 (v0.7.1)
+作成日時: 2026年10月1日 / 最終更新: 2026年10月22日 (v0.10.2)
 作成者: Claude Opus 5.5

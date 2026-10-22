@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using BepInEx;
 using HarmonyLib;
 using UnityEngine;
 
@@ -39,6 +40,8 @@ namespace ksPlugPatcher_NRE
     ///   - 軽量版の目印は ConditionalWeakTable で持つ（メニューが消えて軽量版が要らなくなれば、目印ごと回収される）。
     ///   - 軽量版は CopyAll で作らない（KKAPI のフックが拡張データごと複製する。KK §11.4）。
     ///   - ストーリー中（<c>GetGirlSaveList</c>：セーブのヒロインの複製）と衣装メニューは対象外（影響が小さい）。
+    ///
+    /// 0.9.0: 一覧の顔画像（FileInfo.png）も、作るときに表示に足りる大きさの読み書き不可のテクスチャにする（<see cref="ShrinkFace"/>、設定 ShrinkInviteMenuFaces）。
     /// </summary>
     internal static class LazyInviteCardList
     {
@@ -128,6 +131,8 @@ namespace ksPlugPatcher_NRE
         {
             if (_summaryDepth++ > 0) return;
             _partial = _fullThenLight = _loadFailed = _disabledFull = 0;
+            _facesShrunk = _facesUnreadable = 0;
+            _faceMBBefore = _faceMBAfter = 0;
             _fallbackReasons.Clear();
             _startTicks = Stopwatch.GetTimestamp();
             _monoBefore = GC.GetTotalMemory(false);
@@ -156,7 +161,10 @@ namespace ksPlugPatcher_NRE
                     PatcherPlugin.Logger.LogInfo(
                         $"{Tag} 招待メニューのカード {light}枚を軽量版にしました（部分読み込み {_partial}枚 / 完全に読んでから軽量化 {_fullThenLight}枚" +
                         (reasons.Count > 0 ? $"（{string.Join("、", reasons.ToArray())}）" : "") +
-                        $" / 読み込めず一覧に入らなかったもの {_loadFailed}枚）。所要 {ms:F0}ms、Mono 使用 {_monoBefore / 1048576}→{monoAfter / 1048576}MB。招待する瞬間に完全に読み直します（{State()}）。");
+                        $" / 読み込めず一覧に入らなかったもの {_loadFailed}枚）。所要 {ms:F0}ms、Mono 使用 {_monoBefore / 1048576}→{monoAfter / 1048576}MB。招待する瞬間に完全に読み直します（{State()}）。" +
+                        (_facesShrunk + _facesUnreadable > 0
+                            ? $" 顔画像: 縮小 {_facesShrunk}枚・CPU 側の写しだけ捨てた {_facesUnreadable}枚 / GPU 側の見積 {_faceMBBefore:F0}MB → {_faceMBAfter:F0}MB、CPU 側の写し 約{_faceMBBefore:F0}MB を解放。"
+                            : ""));
                 }
             }
             catch { }
@@ -214,7 +222,8 @@ namespace ksPlugPatcher_NRE
                 object info = Activator.CreateInstance(_fileInfoType);
                 _fiFile.SetValue(info, light);
                 int num = (int)((float)(Screen.height / 6) * 1.5f);
-                _fiPng.SetValue(info, (Texture)PngAssist.ChangeTextureFromByte(light.pngData, (int)((float)num * 0.7f), num));
+                Texture2D face = PngAssist.ChangeTextureFromByte(light.pngData, (int)((float)num * 0.7f), num);
+                _fiPng.SetValue(info, (Texture)ShrinkFace(face, (int)((float)num * 0.7f), num));
                 _fiFilter.SetValue(info, folderFilter);
                 _fiCardPath.SetValue(info, path);
                 light.pngData = null; // 顔のテクスチャを作ったので手放す（招待のときは完全に読み直す）
@@ -226,6 +235,78 @@ namespace ksPlugPatcher_NRE
             {
                 LogOnce("add:" + ex.GetType().Name, $"{Tag} 一覧のカードの軽量化に失敗したため、このカードは元どおり完全に読みます（以降、同じ種類の失敗は出しません）: {ex}");
                 return true;
+            }
+        }
+
+        // ===================== 一覧の顔画像を縮める（0.9.0） =====================
+
+        // MenuInvite の Start / InitFileList ごとの集計
+        private static int _facesShrunk, _facesUnreadable;
+        private static double _faceMBBefore, _faceMBAfter;
+
+        /// <summary>
+        /// 一覧の顔画像（FileInfo.png）を、表示に足りる大きさの読み書き不可のテクスチャにする（設定 ShrinkInviteMenuFaces）。
+        /// ChangeTextureFromByte は LoadImage なので、大きさはカードの画像のまま（高解像度のカードは 808x1128 など）・ミップマップ付き・読み書き可能で、
+        /// GPU 側に加えて CPU 側にも同じ大きさの写しが残る（KKS で 471枚・GPU 486MB＋CPU 486MB、タイトルに戻っても残る。docs/KSPLUG_ISSUES.md §6）。
+        /// ksPlug は FileInfo.png を表示にしか使わない（通常版は GUIStyle のボタンの画像、VR 版はマテリアルの mainTexture）。
+        /// 大きさの上限: 通常版は ksPlug の表示の大きさ（0.7*num x num）、VR 版は KK の kPlugPatcher の VR 版と同じ 252x352（KKS のカードの顔画像の大きさ）。
+        /// </summary>
+        private static Texture2D ShrinkFace(Texture2D face, int displayW, int displayH)
+        {
+            if (face == null || PatcherPlugin.ShrinkInviteMenuFaces == null || !PatcherPlugin.ShrinkInviteMenuFaces.Value) return face;
+            try
+            {
+                bool vr = Paths.ProcessName.EndsWith("VR", StringComparison.OrdinalIgnoreCase);
+                int maxW = vr ? 252 : Math.Max(1, displayW), maxH = vr ? 352 : Math.Max(1, displayH);
+                double size = EstimateMB(face.width, face.height);
+                _faceMBBefore += size;
+                Texture2D small = Shrink(face, maxW, maxH);
+                if (small != null)
+                {
+                    UnityEngine.Object.Destroy(face);
+                    _faceMBAfter += EstimateMB(small.width, small.height);
+                    _facesShrunk++;
+                    return small;
+                }
+                face.Apply(false, true); // 収まるものは CPU 側の写しだけ捨てる
+                _faceMBAfter += size;
+                _facesUnreadable++;
+                return face;
+            }
+            catch (Exception ex)
+            {
+                LogOnce("face:" + ex.GetType().Name, $"{Tag} 顔画像の縮小に失敗しました（そのまま使います。以降、同じ種類の失敗は出しません）: {ex.Message}");
+                return face;
+            }
+        }
+
+        /// <summary>ミップマップ付き RGBA32 の見積（MB）。</summary>
+        private static double EstimateMB(int w, int h) => w * h * 4 * 4.0 / 3.0 / (1024 * 1024);
+
+        /// <summary>maxW x maxH に収まらなければ、縦横比を保って縮めた新しいテクスチャ（ミップマップ付き・読み書き不可）を返す。収まるなら null（KK の kPlugPatcher の MenuInviteFaceShrink.Shrink と同じ）。</summary>
+        private static Texture2D Shrink(Texture2D src, int maxW, int maxH)
+        {
+            float scale = Mathf.Min((float)maxW / src.width, (float)maxH / src.height);
+            if (scale >= 1f) return null;
+            int w = Mathf.Max(1, Mathf.RoundToInt(src.width * scale));
+            int h = Mathf.Max(1, Mathf.RoundToInt(src.height * scale));
+
+            var rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+            var prev = RenderTexture.active;
+            try
+            {
+                Graphics.Blit(src, rt);
+                RenderTexture.active = rt;
+                var dst = new Texture2D(w, h, TextureFormat.ARGB32, true);
+                dst.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                dst.Apply(true, true);
+                dst.name = src.name;
+                return dst;
+            }
+            finally
+            {
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
             }
         }
 

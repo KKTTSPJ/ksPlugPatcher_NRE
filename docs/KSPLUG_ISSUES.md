@@ -26,6 +26,8 @@ The goal is to make it easy to fix them in ksPlug itself, so that this patch is 
 | 9 | Smaller NREs seen only a few times (`Binder.StoreUserPref`, `Events.SearchMissingSave`, ksPlugVR `Dealer.Update`, ksPlugVR `GuestAction.QueryInfoFromMain`) | One exception each time | ksPlug, missing null check | not patched |
 | 10 | `Dealer.Ctx` after "Return to title" from the config screen during H (normal mode) | Invited girls stay in the story and in the next H, NRE every frame on the title screen, the next H cannot be ended | ksPlug, behavior | `HContextResetOnTitle.cs` / `EnableHContextResetOnTitle`, `EnableEndHGuard` |
 | 11 | Game `HSprite.OnSpeedUpClick` in service (houshi) positions | All H buttons (finish, end, position menu) stay disabled in the loop / before the finish | game, made more likely by slow frames and long voice lines | `HoushiVoiceWaitFix.cs` / `EnableSpeedUpVoiceWaitFix`, `EnableVoiceWaitWatchdog` |
+| 12 | Game VRTK (`VRTK_UIGraphicRaycaster`), ksPlugVR menus | VR title screen: a ksPlugVR menu cannot be clicked where it overlaps the title UI; the ray goes through it | game, affects ksPlugVR | `VRMenuRaycastPriority.cs` / `FixRayForKsPlugMenus` |
+| 13 | Game (KKS) `Manager.Character.enableCharaLoadGCClear` | In H, old outfit textures stay in memory after each outfit change until H ends (VRAM can overflow) | game, made worse by many characters; IllusionFixes is involved; fixing it is optional | `HOutfitCleanup.cs` / `EnableHOutfitCleanup` (optional) |
 
 ## Common cause of #1–#3 (and #8)
 
@@ -210,6 +212,8 @@ The list itself only needs the name / parameter and the face texture (`FileInfo.
 A prefix on `InviteSomeone` reloads the full card from `cardPath`. Result with 375 cards: the list takes about 2.4 s and Mono grows by +77 to +117 MB instead of +7 GB.
 Invited cards are written back by `CleanCreatedFileInfo` as before.
 
+**Face textures.** The face textures of the list (`FileInfo.png`, made with `PngAssist.ChangeTextureFromByte`) keep the full card size, with mipmaps and a readable CPU copy, although they are only shown small (471 faces: about 486 MB on the GPU plus 486 MB on the CPU, kept even after returning to the title). Making them at the display size and calling `Apply(true, true)` (or `Apply(false, true)` when they are already small) frees the CPU copy; the patch does this (`ShrinkInviteMenuFaces`, on by default; GPU 486 MB → 212 MB and the 486 MB CPU copy freed in ksPlugVR 1.7.3, no visible difference).
+
 ## 7. Many invited characters: DynamicBone cost
 
 **Symptom.** The frame time grows quickly with the number of invited girls.
@@ -384,6 +388,67 @@ Long voice lines make the player click more while waiting: in 3P the game waits 
 **Patch.**
 - After `HSprite.OnSpeedUpClick`: if it changed `voiceWait` from `false` to `true` while `nowAnimStateName` is no longer `Idle`, set it back to `false` (confirmed in game: it fired twice and the H continued normally).
 - Safety net in `HSceneProc.Update`: in `houshi` / `houshi3P`, in `WLoop` / `SLoop` / `OLoop` before the finish (`rePlay` 0), if `voiceWait` has been `true` for 3 seconds with no pending position change, no click, and no voice to wait for (same rule as `IsCheckVoicePlay`), set it to `false`.
+
+## 12. Game VRTK: ksPlugVR menus cannot be clicked where they overlap the title UI
+
+Not a ksPlug bug, but it is what ksPlugVR users see on the VR title screen.
+
+**Symptom.** On the VR title screen, where a ksPlugVR menu overlaps the area of the title UI canvas, the pointer ray changes color and goes through the ksPlug menu to the title menu behind it.
+Clicks on the ksPlug menu are ignored in that area. Outside the area the menu works.
+
+**Cause.** This is in the game's VRTK.
+`VRTK_VRInputModule.CheckRaycasts` puts the ray origin and direction into `pointerEventData.pointerCurrentRaycast` (`worldPosition` / `worldNormal`) and calls `EventSystem.RaycastAll`.
+Each `VRTK_UIGraphicRaycaster.Raycast` builds its ray from that value. When a raycaster hits something, `SetNearestRaycast` overwrites `pointerCurrentRaycast` with its own hit:
+`worldPosition` becomes the hit point and `worldNormal` becomes zero (it is not set in the `RaycastResult`).
+Every raycaster that runs after that builds its ray from the hit point with a zero direction, so it never hits anything.
+
+The title `Canvas` is registered before the ksPlugVR menu canvases (made in `Menu.VRUI.CreateVRmenu`), and a `VRTK_UICANVAS_DRAGGABLE_PANEL` covers the whole title canvas.
+So inside the title canvas area the ksPlug menus are always missed, even when they are nearer. Both canvases have `sortingOrder` 0, so the sort order is not the cause
+(reordering the results, which we tried first, did not help: the ksPlug menu was never in the results there).
+
+**Suggestion.** This is game code. ksPlugPatcher_NRE already fixes it with a Harmony patch (below), so no change in ksPlug is needed.
+If you want ksPlugVR to handle it as well, the same idea works from ksPlugVR: give the raycaster of its menu canvases the original ray (the pointer's origin and direction) instead of `pointerCurrentRaycast`.
+Feel free to use the code of the patch (`VRMenuRaycastPriority.cs`, MIT).
+
+**Patch.** `FixRayForKsPlugMenus` (VR only, on by default):
+- While `CheckRaycasts` runs, the first raycaster's input (the original origin and direction) is recorded.
+- Just before a raycaster on a ksPlugVR menu canvas runs, the original ray is put back into `pointerCurrentRaycast`. The game's own canvases are raycast as before.
+- When both are hit, the EventSystem sorts by `sortingOrder` and then distance, so the nearer ksPlug menu comes first.
+
+Confirmed in game with ksPlugVR 1.7.3: the ksPlug menus can be clicked over the title UI, and the title UI still works where no ksPlug menu is in front of it.
+The first attempt, `PreferKsPlugMenu` (move ksPlug hits to the front of the results), is kept as an option but is off by default.
+
+## 13. Game (KKS): unused textures are not unloaded after outfit changes in H
+
+Not a ksPlug bug, but ksPlug makes it more visible (many girls, many outfit changes in one H). IllusionFixes is also involved, and a fix is **not required**:
+leaving H frees everything, and the cleanup itself makes the game stop for a moment. This patch therefore makes it a choice (on by default, can be switched off).
+
+**Symptom.** In H, each outfit change leaves the textures of the old outfit (RenderTextures and others) in memory until H ends.
+With 6 girls, repeated outfit changes added about +5.6 GB of VRAM; in VR the VRAM overflowed and SteamVR crashed. Leaving H frees it all.
+
+**Cause.**
+- `ChaControl.ReloadNoAsync` (used by `ChangeCoordinateTypeAndReload` and the other reloads) calls `Resources.UnloadUnusedAssets` only when `Manager.Character.enableCharaLoadGCClear` is `true`.
+- In Koikatsu Sunshine, `Manager.Character.BeginLoadAssetBundle(_resources: true)` sets it to `false`. It is called from `ChaLoadingTask.Reserve` (loading characters asynchronously, as when H starts) and from `ActionScene`.
+  `EndLoadAssetBundle` does not set it back, and `ChaLoadingTask.Loading` does not call `EndLoadAssetBundle` at all.
+  Only `ActionScene`, `NPC`, `Cycle`, `CustomScene` and Studio set it back to `true`. So after H loads its characters, the value stays `false` until H ends.
+  In our logs it changed to `false` when H loaded and stayed `false` for every outfit change in H. (In Koikatsu, `BeginLoadAssetBundle` does not change the value.)
+- IllusionFixes (`KKS_Fix_ResourceUnloadOptimizations`) handles `UnloadUnusedAssets` and skips it while RAM use is below its threshold (75% by default, "Optimize Memory Threshold").
+  It does not look at VRAM. So even if the value were set back to `true`, the cleanup would rarely run on a PC with a lot of RAM.
+
+**Why a fix is optional.** One `UnloadUnusedAssets` stops the game for about 0.6–0.7 s in H (the time grows with the number of loaded objects, not with what is freed).
+Koikatsu runs it on every outfit change. With few girls or enough VRAM, keeping the old textures until the end of H does no harm.
+
+**Suggestion.** No change in ksPlug is needed. If you want ksPlug to free them, one `Resources.UnloadUnusedAssets()` after a group of outfit changes is enough (not one per change).
+Feel free to use the code of the patch (`HOutfitCleanup.cs`, MIT).
+
+**Patch.** `EnableHOutfitCleanup` (on by default) with `Timing`, `DelaySeconds`, `IdleFallbackSeconds` and `BypassIllusionFixesMemoryCheck`. It works only in H and only while the value is `false`, and it does not change the value.
+- `Timing = WithNextChange` (default): at the next outfit change that comes at least `DelaySeconds` (5 s) after the previous one, it unloads once for all changes so far.
+  The stop then overlaps the stop of the outfit change itself, and several quick changes in a row are cleaned up together. The textures of the last change stay until the next change or the end of H
+  (`IdleFallbackSeconds` can clean them up after a quiet time; 0 = off by default).
+- `Timing = AfterDelay`: `DelaySeconds` after the last outfit change. This shows up as a separate short stop after the change.
+- `BypassIllusionFixesMemoryCheck` (on by default): when IllusionFixes is installed, its original unload is called directly, so the RAM check does not skip it.
+
+Confirmed in game with ksPlugVR 1.7.3: textures no longer build up with repeated outfit changes in H (RenderTextures with one girl stayed at 141–240 instead of growing), and each cleanup took 0.60–0.66 s.
 
 ## License of this document and the patch
 

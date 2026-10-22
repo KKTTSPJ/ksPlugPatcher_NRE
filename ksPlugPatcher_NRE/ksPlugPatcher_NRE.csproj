@@ -6,7 +6,7 @@
   -->
   <PropertyGroup>
     <TargetFramework>net46</TargetFramework>
-    <Version>0.7.1</Version>
+    <Version>0.10.2</Version>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <EnableDefaultItems>False</EnableDefaultItems>
     <Configurations>Release_KKS</Configurations>
@@ -27,12 +27,16 @@
     <Compile Include="KsPlugStaleRefFix.cs" />
     <Compile Include="CtrlBonesStaleRefFix.cs" />
     <Compile Include="DynamicBonePerf.cs" />
+    <Compile Include="DynamicBoneColliderCache.cs" />
     <Compile Include="LazyInviteCardList.cs" />
     <Compile Include="FaceListReloadOnSwap.cs" />
     <Compile Include="MaterialNullGuard.cs" />
     <Compile Include="HContextResetOnTitle.cs" />
     <Compile Include="HStallDiag.cs" />
     <Compile Include="HoushiVoiceWaitFix.cs" />
+    <Compile Include="VRMenuRaycastPriority.cs" />
+    <Compile Include="CharaLoadGCClearDiag.cs" />
+    <Compile Include="HOutfitCleanup.cs" />
   </ItemGroup>
 
   <ItemGroup>

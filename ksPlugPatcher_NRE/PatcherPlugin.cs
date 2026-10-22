@@ -26,6 +26,9 @@ namespace ksPlugPatcher_NRE
     /// - <see cref="HContextResetOnTitle"/>: 設定画面からタイトルに戻ると ksPlug の H の状態が残り、招待キャラが残る・次の H を終えられない問題。
     /// - <see cref="HStallDiag"/>: H が絶頂の前後で先に進まなくなる問題を調べる診断ログ（回避策ではない）。
     /// - <see cref="HoushiVoiceWaitFix"/>: ゲーム本体の奉仕で voiceWait が戻らず、H の UI が押せないまま止まる問題。
+    /// - <see cref="VRMenuRaycastPriority"/>: ksPlugVR のメニューが、レイが当たっているのにタイトルなどのキャンバスに取られてクリックできない問題（VR のみ）。
+    /// - <see cref="CharaLoadGCClearDiag"/>: H 中の着替えで使っていない画像の掃除が動かない原因を調べる診断ログ（回避策ではない）。
+    /// - <see cref="HOutfitCleanup"/>: H 中の着替えで出た古い服の画像が H を出るまで解放されない問題（ゲーム本体の KKS の不具合）。
     ///
     /// 方針（kPlugPatcher_InviteChrID と同じ）:
     /// - 原型の挙動を変えない。破棄済みの要素を飛ばす・探し直す以外は、原型と同じ順序・同じ戻り値にする。
@@ -42,7 +45,7 @@ namespace ksPlugPatcher_NRE
     {
         public const string GUID = "kkttspj.kks.ksplugpatcher.nre";
         public const string PluginName = "ksPlug Patcher NRE";
-        public const string Version = "0.7.1";
+        public const string Version = "0.10.2";
 
         /// <summary>0.5.1 までの GUID。設定ファイル（{GUID}.cfg）の引き継ぎにだけ使う。</summary>
         private const string LegacyGuid = "com.your.kks.ksplugpatcher.nre";
@@ -60,8 +63,21 @@ namespace ksPlugPatcher_NRE
         internal static ConfigEntry<bool> DisableGuestBreastDynamicBones;
         internal static ConfigEntry<bool> LimitDynamicBoneIterations;
         internal static ConfigEntry<int> MaxDynamicBoneIterationsPerFrame;
+        internal static ConfigEntry<bool> EnableDynamicBoneColliderCache;
+        internal static ConfigEntry<bool> MergeDynamicBoneColliderLoop;
+        internal static ConfigEntry<bool> VerifyDynamicBoneColliderCache;
         internal static ConfigEntry<bool> EnableLazyInviteCardList;
         internal static ConfigEntry<bool> LazyInvitePartialLoad;
+        internal static ConfigEntry<bool> ShrinkInviteMenuFaces;
+        internal static ConfigEntry<bool> FixVRMenuRay;
+        internal static ConfigEntry<VRMenuRaycastPriority.PreferMode> VRMenuRaycastMode;
+        internal static ConfigEntry<bool> LogVRMenuRaycastHits;
+        internal static ConfigEntry<bool> EnableCharaLoadGCClearDiagnostics;
+        internal static ConfigEntry<bool> EnableHOutfitCleanup;
+        internal static ConfigEntry<HOutfitCleanup.CleanupTiming> HOutfitCleanupTiming;
+        internal static ConfigEntry<float> HOutfitCleanupDelaySeconds;
+        internal static ConfigEntry<float> HOutfitCleanupIdleFallbackSeconds;
+        internal static ConfigEntry<bool> HOutfitCleanupBypassIllusionFixes;
         internal static ConfigEntry<bool> EnableFaceListReloadOnSwap;
         internal static ConfigEntry<bool> EnableMaterialNullGuard;
         internal static ConfigEntry<bool> EnableHContextResetOnTitle;
@@ -119,6 +135,19 @@ namespace ksPlugPatcher_NRE
             MaxDynamicBoneIterationsPerFrame = Config.Bind(
                 "DynamicBonePerf", "MaxIterationsPerFrame", 1,
                 new ConfigDescription("LimitDynamicBoneIterations の上限（1〜2。3以上はゲーム本体と同じ）。", new AcceptableValueRange<int>(1, 3)));
+            EnableDynamicBoneColliderCache = Config.Bind(
+                "DynamicBoneColliderCache", "EnableColliderCache", true,
+                "揺れもの（DynamicBone / Ver01 / Ver02）の当たり判定を、結果を変えずに軽くする（0.8.0）。ゲーム本体は、揺れものの粒ごとに全部のコライダーの位置と大きさを求め直しているため、粒とコライダーの多い髪・服で1つ数 ms/f かかります。" +
+                "有効な場合は、揺れもの1つの計算の最初に、コライダーの位置と大きさを1回だけ求めておき、粒ごとにはその値を使います（計算の式は元と同じ。KK の kPlugPatcher では、元の処理と結果が同じことを確かめました）。" +
+                "招待キャラの揺れものを止めない場合にも効きます。ゲーム中に切り替えられます。");
+            MergeDynamicBoneColliderLoop = Config.Bind(
+                "DynamicBoneColliderCache", "MergeColliderLoop", true,
+                "EnableColliderCache が有効なとき、粒ごとのコライダーのループ全体を1回の呼び出しにまとめる（0.8.0）。1組ごとに呼び出しを差し替える形より、さらに短くなります。" +
+                "コライダーを回る順番と条件は元のループと同じ。ゲーム中に切り替えられます。");
+            VerifyDynamicBoneColliderCache = Config.Bind(
+                "DynamicBoneColliderCache", "VerifyColliderCache", false,
+                "確かめる用（0.8.0）。EnableColliderCache が有効なとき、前計算の結果と元の処理の結果を毎回比べ、違った回数と最大の差を60秒ごとのログに出します。" +
+                "元の処理も呼ぶので、有効にしている間は元より重くなります。ゲーム中に切り替えられます。");
 
             EnableLazyInviteCardList = Config.Bind(
                 "LazyInviteCardList", "EnableLazyInviteCardList", true,
@@ -127,6 +156,52 @@ namespace ksPlugPatcher_NRE
             LazyInvitePartialLoad = Config.Bind(
                 "LazyInviteCardList", "PartialLoad", true,
                 "一覧のカードを、ファイルから名前・性格（Parameter）と画像だけを読む部分読み込みで作るかどうか。無効にすると、1枚ずつ完全に読んでから軽量版にします（拡張データの展開や見つからない MOD の警告はそのまま起きます）。");
+            ShrinkInviteMenuFaces = Config.Bind(
+                "LazyInviteCardList", "ShrinkInviteMenuFaces", true,
+                "招待メニューの一覧の顔画像を、表示に足りる大きさの読み書き不可の画像にして作るかどうか（0.9.0）。ksPlug はカードの画像の大きさのまま・読み書き可能で作るため、" +
+                "カードが多いと GPU と CPU の両方に数百MBずつ残ります（KKS で 471枚・GPU 486MB＋CPU 486MB、タイトルに戻っても残る）。" +
+                "大きさの上限は、通常版は ksPlug の表示の大きさ、VR 版は 252x352。EnableLazyInviteCardList が有効なときだけ働きます。次に一覧を読むときから反映されます。");
+
+            FixVRMenuRay = Config.Bind(
+                "VRMenuRaycast", "FixRayForKsPlugMenus", true,
+                "VR のみ（0.9.1）。タイトルなどで ksPlugVR のメニューがクリックできない問題の回避策。VRTK はキャンバスを1つずつ調べるとき、当たったキャンバスがレイを「当たった点・向き 0」に書き換えるため、" +
+                "後に調べるキャンバスは必ず外れます（タイトルの UI のキャンバスの範囲では、手前の ksPlug のメニューに当たらない）。ksPlug のメニューを調べるときだけ元のレイに戻します。" +
+                "ゲームのキャンバスどうしの調べ方は変えません。ゲーム中に切り替えられます。");
+            VRMenuRaycastMode = Config.Bind(
+                "VRMenuRaycast", "PreferKsPlugMenu", VRMenuRaycastPriority.PreferMode.Off,
+                "VR のみ（0.9.0）。ksPlugVR のメニューにレイが当たっているのに、タイトルの UI などの他のキャンバスが先に選ばれてクリックできないときに、ksPlug のメニューを優先するかどうか。" +
+                "Off: 何もしない（ゲームの元の順番、0.10.2 から既定）。WhenNearer: ksPlug のメニューの方が手前にあるときだけ優先する。Always: ksPlug のメニューに当たっていれば常に優先する。" +
+                "タイトルの問題の原因はレイの書き換えで（FixRayForKsPlugMenus で直る）、並べ替えでは直らなかったため、既定は Off です。" +
+                "ksPlug のメニューに当たっていないときは何もしません。ゲーム中に切り替えられます。");
+            LogVRMenuRaycastHits = Config.Bind(
+                "VRMenuRaycast", "LogRaycastHits", false,
+                "VR のみ（0.9.0）。確かめる用（0.10.2 から既定 false）。レイの当たり先の先頭が変わったときに、上位4つ（キャンバス・sortingLayer・sortingOrder・距離・ksPlug のメニューか）をログに出すかどうか。" +
+                "シーンごとに80行まで。ゲーム中に切り替えられます。");
+            EnableCharaLoadGCClearDiagnostics = Config.Bind(
+                "CharaLoadGCClearDiag", "EnableCharaLoadGCClearDiagnostics", false,
+                "確かめる用（0.9.0、0.10.2 から既定 false）。H 中の着替えで使っていない画像の掃除（UnloadUnusedAssets）が動かない原因を調べるため、ゲーム本体の設定値 Manager.Character.enableCharaLoadGCClear が変わったときと、" +
+                "着替え（ChangeCoordinateTypeAndReload）のときの値をログに出すかどうか。回避策ではありません。ゲーム中に切り替えられます。");
+            EnableHOutfitCleanup = Config.Bind(
+                "HOutfitCleanup", "EnableHOutfitCleanup", true,
+                "H 中の着替えで出た古い服の画像（RenderTexture など）を、着替えの数秒後にまとめて1回解放するかどうか（0.10.0）。KKS のゲーム本体は、H でキャラを読み込むと着替えの後の掃除を止めたままにするため、" +
+                "H を出るまで古い服の画像が残り、着替えを続けると VRAM が溢れることがあります（女6人で +5.6GB）。掃除の間（0.5〜1秒ほど）止まります（KK は着替えのたびに止まります）。" +
+                "止まるのが気になる場合は無効にしてください（H を出れば解放されます）。ゲーム中に切り替えられます。");
+            HOutfitCleanupTiming = Config.Bind(
+                "HOutfitCleanup", "Timing", HOutfitCleanup.CleanupTiming.WithNextChange,
+                "掃除する時期（0.10.1）。WithNextChange: 前の着替えから DelaySeconds 以上たってからの次の着替えの直後に、それまでの分を掃除する（既定。着替えの停止に続けて止まるので目立ちにくい。" +
+                "最後の着替えの分は次の着替えか H を出るまで残る）。AfterDelay: 最後の着替えから DelaySeconds 後に掃除する（0.10.0 の動き。着替えの後に別に一瞬止まる）。ゲーム中に切り替えられます。");
+            HOutfitCleanupDelaySeconds = Config.Bind(
+                "HOutfitCleanup", "DelaySeconds", 5f,
+                new ConfigDescription("WithNextChange: 前の着替えからこの秒数以上たっていれば、次の着替えのときに掃除する（続けて着替える間は掃除しない）。" +
+                    "AfterDelay: 最後の着替えから掃除までの秒数（続けて着替えたら数え直す）。どちらも、何人続けて着替えても1回で済みます。", new AcceptableValueRange<float>(1f, 60f)));
+            HOutfitCleanupIdleFallbackSeconds = Config.Bind(
+                "HOutfitCleanup", "IdleFallbackSeconds", 0f,
+                new ConfigDescription("WithNextChange のとき、着替えが無いままこの秒数たったら、残っている分を掃除する（0 で無効。既定）。最後の着替えの分を早く解放したい場合に使います（そのときは一瞬止まります）。",
+                    new AcceptableValueRange<float>(0f, 600f)));
+            HOutfitCleanupBypassIllusionFixes = Config.Bind(
+                "HOutfitCleanup", "BypassIllusionFixesMemoryCheck", true,
+                "IllusionFixes（ResourceUnloadOptimizations）が入っているとき、その「RAM の使用率が低ければ掃除を飛ばす」判定を通さずに掃除するかどうか。" +
+                "IllusionFixes は RAM だけを見て VRAM を見ないため、RAM に余裕がある PC では掃除が飛ばされます。");
 
             EnableFaceListReloadOnSwap = Config.Bind(
                 "FaceListReloadOnSwap", "EnableFaceListReloadOnSwap", true,
@@ -176,6 +251,8 @@ namespace ksPlugPatcher_NRE
             FaceListReloadOnSwap.TryApply(_harmony);
             HStallDiag.TryApply(_harmony);
             HoushiVoiceWaitFix.TryApply(_harmony);
+            CharaLoadGCClearDiag.TryApply(_harmony);
+            HOutfitCleanup.TryApply(_harmony);
         }
 
         /// <summary>
@@ -204,6 +281,10 @@ namespace ksPlugPatcher_NRE
             // ksPlug の型は ksPlug の読み込み後に引く（BepInDependency で後に読み込まれるが、念のため Start で行う）
             KsPlugStaleRefFix.TryApply(_harmony);
             DynamicBonePerf.TryApply(_harmony);
+            // 揺れものの当たり判定を、結果を変えずに軽くする（設定はゲーム中に切り替えられるので、常に当てる）
+            DynamicBoneColliderCache.TryApply(_harmony);
+            // ksPlugVR のメニューのレイの優先（VR のみ。ksPlugVR の VRUI の型を引くので Start で行う）
+            VRMenuRaycastPriority.TryApply(_harmony);
         }
 
         private void FixedUpdate()
@@ -251,6 +332,8 @@ namespace ksPlugPatcher_NRE
         private void Update()
         {
             DynamicBonePerf.OnUpdate();
+            CharaLoadGCClearDiag.OnUpdate();
+            HOutfitCleanup.OnUpdate();
             if (IsQuitting && Time.frameCount > _quitRequestedFrame)
             {
                 IsQuitting = false;
